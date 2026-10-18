@@ -1,6 +1,6 @@
 # wordpress-deploy-kit
 
-> Chinese: [README.md](README.md)
+**English** · [简体中文](README.md)
 
 A single-file script that **deploys a production WordPress site on an Ubuntu
 cloud server in one command**. That command installs, configures, verifies and

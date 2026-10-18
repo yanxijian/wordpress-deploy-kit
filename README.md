@@ -1,6 +1,6 @@
 # wordpress-deploy-kit
 
-> English: [README.en.md](README.en.md)
+[English](README.en.md) · **简体中文**
 
 在 Ubuntu 云服务器上**一键部署 WordPress 生产站点**的单文件脚本。
 一条命令完成 Nginx + MariaDB + PHP-FPM + WordPress 中文版 + Let's Encrypt HTTPS
