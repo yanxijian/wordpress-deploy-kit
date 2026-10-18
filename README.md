@@ -200,6 +200,18 @@ bash /root/cert_manage.sh reissue   # 重新签发安装（证书环节曾失败
 - **备份**：UpdraftPlus 等插件务必**配置定时任务**（很多站点装了却没设计划，等于没有备份）
 - **系统补丁**：Ubuntu 20.04 标准支持已于 2025-05 结束，建议 `pro attach` 启用免费 ESM，或规划升级到 22.04/24.04
 
+## 开发约定（RepoRules）
+
+本仓接入 [RepoRules](https://github.com/yanxijian/RepoRules) 做机械检查（编码/行尾/Markdown 链接），检查器随仓内置：
+
+```bash
+python scripts/repo_rules.py check     # 检查
+python scripts/repo_rules.py fix       # 自动修复（行尾、BOM 等）
+git config core.hooksPath .githooks    # 每份克隆执行一次：提交前自动检查
+```
+
+- 文本文件统一 UTF-8 无 BOM，`.sh` / `.md` 行尾为 LF，由 `.gitattributes` 固定。
+
 ## License
 
 [MIT](./LICENSE) © 2026 wordpress-deploy-kit contributors

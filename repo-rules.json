@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "skip_dirs": [
+    ".git"
+  ],
+  "skip_prefixes": [],
+  "skip_globs": [],
+  "encoding": [
+    {
+      "glob": "*.sh",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
+      "glob": "*.md",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
+      "glob": "*.json",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
+      "glob": ".gitignore",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
+      "glob": ".gitattributes",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
+      "glob": "LICENSE",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
+      "glob": "scripts/repo_rules.py",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
+      "glob": ".githooks/pre-commit",
+      "bom": false,
+      "eol": "lf"
+    }
+  ],
+  "width": {
+    "globs": [],
+    "limit": 140,
+    "tab_width": 4
+  },
+  "forbidden": [],
+  "headers": {
+    "globs": [],
+    "first_line": "#pragma once",
+    "forbid_namespace_using": true
+  },
+  "versions": [],
+  "changelog": null,
+  "required_files": [
+    "README.md",
+    "wp_deploy.sh",
+    "LICENSE",
+    "scripts/repo_rules.py",
+    ".githooks/pre-commit"
+  ],
+  "markdown": {
+    "globs": [
+      "*.md"
+    ],
+    "check_links": true,
+    "bilingual_pairs": []
+  },
+  "gitattributes": {
+    "path": ".gitattributes",
+    "required_patterns": [
+      "\\* text=auto eol=lf",
+      "\\*\\.sh\\s+text eol=lf"
+    ]
+  }
+}
