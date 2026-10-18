@@ -1,0 +1,18 @@
+# 系统与编辑器产物
+*~
+*.swp
+.DS_Store
+Thumbs.db
+
+# 密钥与凭据（严禁入库）
+*.pem
+*.key
+*.ppk
+id_rsa*
+vps_*.rsa
+answers.txt
+deploy.log
+*.log
+
+# WordPress 源码包
+*.tar.gz
