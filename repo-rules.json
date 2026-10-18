@@ -67,6 +67,7 @@
   "changelog": null,
   "required_files": [
     "README.md",
+    "README.en.md",
     "wp_deploy.sh",
     "LICENSE",
     "scripts/repo_rules.py",
@@ -77,7 +78,12 @@
       "*.md"
     ],
     "check_links": true,
-    "bilingual_pairs": []
+    "bilingual_pairs": [
+      [
+        "README.md",
+        "README.en.md"
+      ]
+    ]
   },
   "gitattributes": {
     "path": ".gitattributes",

@@ -1,5 +1,7 @@
 # wordpress-deploy-kit
 
+> English: [README.en.md](README.en.md)
+
 在 Ubuntu 云服务器上**一键部署 WordPress 生产站点**的单文件脚本。
 一条命令完成 Nginx + MariaDB + PHP-FPM + WordPress 中文版 + Let's Encrypt HTTPS
 的安装、配置、验证与自动续期，全程约 5~8 分钟。
