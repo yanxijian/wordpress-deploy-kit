@@ -211,6 +211,7 @@ git config core.hooksPath .githooks    # 每份克隆执行一次：提交前自
 ```
 
 - 文本文件统一 UTF-8 无 BOM，`.sh` / `.md` 行尾为 LF，由 `.gitattributes` 固定。
+- CI 会检出 RepoRules 主仓并跑 `sync --check`：内置副本落后于上游即失败。更新方法（在 RepoRules 源码目录执行）：`python repo_rules.py sync --root <本仓> --hook`。
 
 ## License
 

@@ -22,6 +22,11 @@
       "eol": "lf"
     },
     {
+      "glob": "*.yml",
+      "bom": false,
+      "eol": "lf"
+    },
+    {
       "glob": ".gitignore",
       "bom": false,
       "eol": "lf"

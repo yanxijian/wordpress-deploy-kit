@@ -1,0 +1,36 @@
+# Repository rules that do not need a compiler.
+#
+# The last step pulls the upstream RepoRules checker and compares it with the
+# vendored copy, so a stale checker fails CI instead of drifting silently.
+# Update the copy from a RepoRules checkout:
+#   python repo_rules.py sync --root <this repo> --hook
+
+name: hygiene
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repo-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check repository rules
+        run: python3 scripts/repo_rules.py check --config repo-rules.json
+      - uses: actions/checkout@v4
+        with:
+          repository: yanxijian/RepoRules
+          path: .repo-rules
+      - name: Check vendored checker is current
+        run: python3 .repo-rules/repo_rules.py sync --root . --hook --check
