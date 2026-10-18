@@ -33,6 +33,28 @@ __version__ = "0.1.0"
 CONFIG_NAME = "repo-rules.json"
 TOOL_ROOT = Path(__file__).resolve().parent
 BOM = b"\xef\xbb\xbf"
+# Embedded so `sync --hook` also works from a vendored copy, where templates/ is absent.
+PRECOMMIT_HOOK = """#!/bin/sh
+# Pre-commit hook installed by `repo-rules init`.
+#
+# Install once per clone:
+#   git config core.hooksPath .githooks
+#
+# The same check runs in CI; this hook is a convenience.
+
+set -e
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+for candidate in python3 python py; do
+\tif command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys' >/dev/null 2>&1; then
+\t\texec "$candidate" scripts/repo_rules.py check --config repo-rules.json --staged
+\tfi
+done
+
+echo "pre-commit: no Python interpreter found; skipping repository rules" >&2
+exit 0
+"""
 
 
 class ConfigError(Exception):
@@ -618,19 +640,26 @@ def command_init(args: argparse.Namespace) -> int:
         shutil.copy2(Path(__file__).resolve(), tool_target)
         print("copied tool to %s" % tool_target)
 
-    template_pairs = (
-        ("templates/githooks/pre-commit", ".githooks/pre-commit"),
-        ("templates/github/workflows/hygiene.yml", ".github/workflows/hygiene.yml"),
-    )
-    for source_name, target_name in template_pairs:
-        source = RESOURCE_ROOT / source_name
-        target = root / target_name
-        if target.exists() and not args.force:
-            print("kept %s (already exists)" % target)
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        print("wrote %s" % target)
+    hook_target = root / ".githooks" / "pre-commit"
+    if hook_target.exists() and not args.force:
+        print("kept %s (already exists)" % hook_target)
+    else:
+        hook_target.parent.mkdir(parents=True, exist_ok=True)
+        hook_target.write_bytes(PRECOMMIT_HOOK.encode("utf-8"))
+        try:
+            hook_target.chmod(0o755)
+        except OSError:
+            pass
+        print("wrote %s" % hook_target)
+
+    workflow_source = RESOURCE_ROOT / "templates" / "github" / "workflows" / "hygiene.yml"
+    workflow_target = root / ".github" / "workflows" / "hygiene.yml"
+    if workflow_target.exists() and not args.force:
+        print("kept %s (already exists)" % workflow_target)
+    else:
+        workflow_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(workflow_source, workflow_target)
+        print("wrote %s" % workflow_target)
 
     print("\nNext:")
     print("  1. edit %s for this project" % config_path)
@@ -643,6 +672,56 @@ def command_list_presets(args: argparse.Namespace) -> int:
     presets = sorted((RESOURCE_ROOT / "presets").glob("*.json"))
     for preset in presets:
         print(preset.stem)
+    return 0
+
+
+def command_sync(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve()
+    if not root.is_dir():
+        print("repo-rules: not a directory: %s" % root, file=sys.stderr)
+        return 2
+
+    source = Path(getattr(args, "source", None) or __file__).resolve()
+    if not source.is_file():
+        print("repo-rules: checker not found: %s" % source, file=sys.stderr)
+        return 2
+
+    dest_rel = getattr(args, "dest", "scripts/repo_rules.py")
+    want_hook = bool(getattr(args, "hook", False))
+    check_only = bool(getattr(args, "check", False))
+
+    jobs = [(root / dest_rel, source.read_bytes(), False)]
+    if want_hook:
+        jobs.append((root / ".githooks" / "pre-commit", PRECOMMIT_HOOK.encode("utf-8"), True))
+
+    stale = []
+    for dst, payload, executable in jobs:
+        try:
+            existing = dst.read_bytes()
+        except OSError:
+            existing = None
+        if existing == payload:
+            print("up to date: %s" % dst)
+            continue
+        stale.append(dst)
+        if check_only:
+            print("stale: %s" % dst)
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(payload)
+        if executable:
+            try:
+                dst.chmod(0o755)
+            except OSError:
+                pass
+        print("synced: %s" % dst)
+
+    if check_only and stale:
+        print("repo-rules: %d file(s) stale (run sync without --check)" % len(stale), file=sys.stderr)
+        return 1
+    if stale and want_hook and not check_only:
+        print("tip: git update-index --chmod=+x .githooks/pre-commit to keep the executable bit")
+    print("repo-rules: %s" % ("synced %d file(s)" % len(stale) if stale else "up to date"))
     return 0
 
 
@@ -667,6 +746,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_presets = subparsers.add_parser("list-presets", help="list built-in presets")
     list_presets.set_defaults(func=command_list_presets)
+
+    sync = subparsers.add_parser("sync", help="sync the vendored checker and hook into a project")
+    sync.add_argument("--root", default=".", help="target repository root")
+    sync.add_argument("--dest", default="scripts/repo_rules.py", help="vendored checker path relative to --root")
+    sync.add_argument("--source", default=None, help="checker file to copy (default: this script)")
+    sync.add_argument("--hook", action="store_true", help="also sync .githooks/pre-commit")
+    sync.add_argument("--check", action="store_true", help="verify only; exit 1 when a copy is stale")
+    sync.set_defaults(func=command_sync)
     return parser
 
 
