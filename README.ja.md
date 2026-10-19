@@ -2,6 +2,8 @@
 
 **日本語** · [English](README.md) · [简体中文](README.zh-CN.md) · [한국어](README.ko.md)
 
+<!-- translated-from: README.md sha256:a392dd51ff97 -->
+
 **Ubuntu のクラウドサーバーに本番用 WordPress をワンコマンドで構築する** 1 ファイルのスクリプトです。その 1 コマンドで Nginx + MariaDB + PHP-FPM + WordPress（中国語版）+ Let's Encrypt HTTPS の導入、設定、検証、自動更新の設定まで行います。全体で 5〜8 分ほどです。
 
 ## 特長

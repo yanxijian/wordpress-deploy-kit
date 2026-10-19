@@ -2,6 +2,8 @@
 
 **简体中文** · [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
+<!-- translated-from: README.md sha256:a392dd51ff97 -->
+
 在 Ubuntu 云服务器上**一键部署 WordPress 生产站点**的单文件脚本。
 一条命令完成 Nginx + MariaDB + PHP-FPM + WordPress 中文版 + Let's Encrypt HTTPS
 的安装、配置、验证与自动续期，全程约 5~8 分钟。
