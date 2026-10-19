@@ -97,5 +97,8 @@
       "\\* text=auto eol=lf",
       "\\*\\.sh\\s+text eol=lf"
     ]
+  },
+  "comments": {
+    "english": true
   }
 }

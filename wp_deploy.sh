@@ -1,36 +1,36 @@
 #!/bin/bash
 #===============================================================
-# wp_deploy.sh —— WordPress 一键部署脚本（Nginx + MariaDB + PHP-FPM + HTTPS）
+# wp_deploy.sh - one-command WordPress deployment (Nginx + MariaDB + PHP-FPM + HTTPS)
 #
-# 适用：Ubuntu 20.04（推荐）/ 22.04 / 24.04 全新系统，root 权限运行
-# 说明：低配 VPS 建议使用 20.04——更高版本的系统组件更重、内存占用更高，
-#       小内存机器上安装与运行容易卡顿甚至卡死
+# Target: a fresh Ubuntu 20.04 (recommended) / 22.04 / 24.04, run as root
+# Note: on a low-spec VPS prefer 20.04 - newer releases ship heavier components and use more memory,
+#             so installation or normal operation can stall or hang on a small machine
 #
-# 流程：
-#   §2  安装 Nginx                §6  配置 Nginx（FastCGI）
-#   §3  安装并加固 MariaDB        §7  自动探针验证
-#   §4  创建 WordPress 数据库     §8  下载并配置 WordPress
-#   §5  安装 PHP-FPM              §9  部署上线
-#                                 §10 Let's Encrypt 证书与自动续期（有域名时）
-#                                 §11 安全基线与体检（logrotate 凭据 / 上传目录禁执行 / mu-plugin 加固 /
-#                                     无人值守更新 / 可选 SSH 仅密钥加固）
+# Flow:
+#     §2  install Nginx               §6  configure Nginx (FastCGI)
+#     §3  install and harden MariaDB  §7  automated probe
+#     §4  create the WordPress DB    §8  download and configure WordPress
+#     §5  install PHP-FPM            §9  deploy and go live
+#                                                                  §10 Let's Encrypt certificate and auto-renewal (with a domain)
+#                                                                  §11 security baseline and health check (logrotate credentials / no PHP in uploads /
+#                                                                          mu-plugin hardening / unattended updates / optional SSH key-only hardening)
 #
-# 交互集中在开头共 5 项：域名（回车=用公网 IP）、MariaDB root 密码、
-# 数据库密码（两者回车=自动生成）、HTTPS 通知邮箱（回车=不填）、参数确认。
-# 支持管道应答无人值守运行。
+# Five prompts up front: domain (Enter = public IP), MariaDB root password,
+# database password (Enter for either = generate), HTTPS notification email (Enter = none), confirmation.
+# Piped answers are supported for unattended runs.
 #
-# 环境变量开关（默认值即推荐值，均不改变既有部署流程）：
-#   WPDK_ALLOW_XMLRPC=1     保留 XML-RPC 端点（默认屏蔽；使用 WP 手机 App / Jetpack 时必须设 1）
-#   WPDK_SKIP_SSH_HARDEN=1  跳过「仅密钥登录」加固（默认在检测到公钥时自动加固）
+# Environment switches (defaults are the recommended values; none changes the deployment flow):
+#     WPDK_ALLOW_XMLRPC=1     keep the XML-RPC endpoint (blocked by default; required for the WP mobile app / Jetpack)
+#     WPDK_SKIP_SSH_HARDEN=1  skip the "key-only login" hardening (on by default when a public key exists)
 #
-# 容错设计：set -e + ERR trap 失败即停；MariaDB 数据目录损坏自动重建；
-# WordPress 多源下载（本地包优先）；密码留空自动生成；已部署机器可安全重跑。
+# Fault tolerance: set -e + ERR trap stop at the first failure; a corrupt MariaDB data directory is rebuilt;
+# WordPress is downloaded from several sources (local archive first); empty passwords are generated; an already deployed machine can rerun safely.
 #===============================================================
 set -e
 trap 'echo ">>> 部署在第 ${LINENO} 行失败，请检查上方错误信息"; exit 1' ERR
 
-#---- 工具函数 ----
-# 生成 8 位随机密码（数字+大小写字母；循环抽取直到同时含三类字符）
+#---- helper functions ----
+# Generate an 8-character random password (digits + upper/lower case; redraw until all three classes appear)
 gen_password() {
     local pw
     while :; do
@@ -42,8 +42,8 @@ gen_password() {
     done
 }
 
-# 判断 nginx.conf 里是否已有占用 443 的 stream 块（即 443 已被独立的 TCP 网关接管，
-# 站点只能挂在内部端口）。只看配置内容，不依赖任何外部写入的标记，保持脚本自包含。
+# Whether nginx.conf already has a stream block on 443 (443 is taken over by a TCP gateway and the site
+# can only listen on an internal port). This reads the config only, no external marker, so the script stays self-contained.
 nginx_443_taken() {
     [ -f /etc/nginx/nginx.conf ] || return 1
     awk '
@@ -62,8 +62,8 @@ nginx_443_taken() {
     ' /etc/nginx/nginx.conf 2> /dev/null
 }
 
-# 重跑兼容：新装机 MariaDB root 无密码；重跑时 root 已有密码（§3 设置过）。
-# 两种情况都兼容：先试无密码登录，失败则带 ROOTPW 登录
+# Rerun compatibility: a fresh install has no MariaDB root password; on a rerun root already has one (§3 set it).
+# Both cases work: try a password-less login first, then retry with ROOTPW
 mysql_run() {
     if mysql -uroot -e 'SELECT 1;' > /dev/null 2>&1; then
         mysql -uroot "$@"
@@ -73,8 +73,8 @@ mysql_run() {
 }
 
 
-# 幂等设置 PHP-FPM 池参数（命中已存在行则改写，注释行同样命中；否则追加）
-# 用法：fpm_set <键> <值> <池配置文件>
+# Idempotently set a PHP-FPM pool parameter (rewrite an existing line, commented lines included; otherwise append)
+# Usage: fpm_set <key> <value> <pool config file>
 fpm_set() {
     local key="$1" val="$2" conf="$3"
     if grep -qE "^[;[:space:]]*${key}[[:space:]]*=" "$conf"; then
@@ -84,8 +84,8 @@ fpm_set() {
     fi
 }
 
-# 幂等写入 wp-config.php 常量（已存在同名 define 则跳过，避免重跑叠加）
-# 用法：wp_config_define <常量名> <PHP 字面量> <wp-config.php 路径>
+# Idempotently write a wp-config.php constant (skip when the same define already exists, so reruns do not stack)
+# Usage: wp_config_define <constant> <PHP literal> <wp-config.php path>
 wp_config_define() {
     local name="$1" value="$2" conf="$3"
     if grep -q "define( *'${name}'" "$conf"; then
@@ -110,10 +110,10 @@ wp_config_define() {
         echo ">>> 警告：${name} 写入失败（临时文件为空），未改动 wp-config.php"
     fi
 }
-#---- 部署参数（全部交互点集中在此）----
+#---- deployment parameters (every interactive point lives here) ----
 read -rp "请输入域名（如 example.com；直接回车 = 用公网 IP 作为 server_name）: " DOMAIN
 
-# 公网 IP 自动检测，无需手工输入：ifconfig.me → ipify → 本机网卡兜底
+# Public IP auto-detection, no manual input: ifconfig.me -> ipify -> local NIC
 SERVER_IP=$(curl -s --max-time 5 https://ifconfig.me)
 [ -n "$SERVER_IP" ] || SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org)
 if [ -z "$SERVER_IP" ]; then
@@ -128,17 +128,17 @@ if [ -z "$DOMAIN" ]; then
     echo ">>> 未输入域名，server_name 将使用公网 IP：${DOMAIN}"
 fi
 
-# MariaDB root 密码（回车=自动生成）——替代 mysql_secure_installation 交互
+# MariaDB root password (Enter = generate) - replaces the interactive mysql_secure_installation
 read -rsp "设置 MariaDB root 密码（直接回车 = 自动生成 8 位随机密码）: " ROOTPW
 echo ""
 [ -n "$ROOTPW" ] || ROOTPW=$(gen_password)
 
-# 数据库用户 wordpress 的密码（回车=自动生成）
+# Password for the wordpress database user (Enter = generate)
 read -rsp "为数据库用户 wordpress 设置密码（直接回车 = 自动生成 8 位随机密码）: " DBPASS
 echo ""
 [ -n "$DBPASS" ] || DBPASS=$(gen_password)
 
-# HTTPS 证书通知邮箱（回车=不注册邮箱；不影响自动续期，仅缺到期提醒邮件）
+# HTTPS notification email (Enter = register no email; renewal still works, you just get no expiry mail)
 read -rp "Let's Encrypt 通知邮箱（证书到期提醒用；直接回车 = 不填写）: " EMAIL
 
 echo ""
@@ -155,9 +155,9 @@ if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
 fi
 echo ">>> MariaDB root 密码：${ROOTPW}（请记录，结尾汇总还会打印）"
 
-# 前置拦截：nginx 已用 stream 接管 443（站点挂在内部端口）时不能重跑本脚本——
-# §6 会把站点配置重写成仅 80 端口，§10 又会让 certbot 重新占用 443，
-# 两者都会破坏正在工作的接管配置与站点。此时应先回滚接管配置，重跑完再重新部署。
+# Preflight block: when nginx already uses stream on 443 (the site listens on an internal port) this script must not rerun -
+# §6 would rewrite the site config back to port 80 only, and §10 would let certbot take 443 again,
+# breaking both the working takeover config and the site. Roll the takeover back first, rerun, then redeploy.
 if nginx_443_taken; then
     echo ""
     echo ">>> 检测到 nginx 已用 stream 接管 443，本脚本会破坏该配置，已中止。"
@@ -171,7 +171,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt update || { sleep 5; apt update; }
 apt install nginx -y
 
-# 启动并设置开机自启
+# Start the service and enable it at boot
 systemctl start nginx
 systemctl enable nginx > /dev/null
 echo ">>> 验证：浏览器访问 http://${DOMAIN} 应看到 'Welcome to nginx!'"
@@ -180,7 +180,7 @@ echo ""
 echo "==== §3 安装 MariaDB ===="
 apt install mariadb-server -y
 
-# 启动失败时自动重建数据目录（apt 安装中断可能导致系统表残缺而无法启动）
+# Rebuild the data directory when startup fails (an interrupted apt install can leave the system tables broken)
 if ! systemctl start mariadb; then
     echo ">>> MariaDB 启动失败，尝试重建数据目录后重试……"
     systemctl stop mariadb 2> /dev/null || true
@@ -190,7 +190,7 @@ if ! systemctl start mariadb; then
 fi
 systemctl enable mariadb > /dev/null
 
-# 等待 socket 就绪（最多 30 秒），避免 SQL 阶段连接失败
+# Wait for the socket (up to 30 s) so the SQL stage does not fail to connect
 for i in $(seq 1 30); do
     if mysqladmin --socket=/run/mysqld/mysqld.sock ping > /dev/null 2>&1; then
         break
@@ -201,11 +201,11 @@ for i in $(seq 1 30); do
         exit 1
     fi
 done
-# 这里的 ping 只判断服务可达性：重跑时 root 已有密码，认证失败会打 Access denied 噪音（退出码仍为 0）
+# This ping only checks reachability: on a rerun root already has a password, so a failed auth logs an Access denied noise line (exit code is still 0)
 mysqladmin --socket=/run/mysqld/mysqld.sock ping 2> /dev/null || true
 
-# 安全加固：等价于 mysql_secure_installation，但无交互依赖，各版本通用
-# （设置 root 密码 / 删除匿名用户 / 删除 test 库；root 仅限本机登录）
+# Hardening: equivalent to mysql_secure_installation, but non-interactive and portable across versions
+# (set the root password / drop anonymous users / drop the test database; root may only log in locally)
 mysql_run <<SQL
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${ROOTPW}';
 DROP USER IF EXISTS ''@'localhost';
@@ -215,13 +215,13 @@ DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db LIKE 'test%';
 FLUSH PRIVILEGES;
 SQL
-# 验证 root 密码生效
+# Verify the root password works
 mysql -uroot -p"${ROOTPW}" -e "SELECT 'MARIADB_SECURE_OK' AS status;"
 echo ">>> §3 完成：root 密码已设置，匿名用户/test 库已移除，root 仅限本机"
 
-# Debian 维护脚本（logrotate 的 mysql 片段、init 脚本等）通过 /etc/mysql/debian.cnf 连接数据库。
-# 系统默认内容是「root + 空密码」，而上面已把 root 改为密码登录 → 不修正的话每天 logrotate 都会失败。
-# 这里按实际口令回填（600 root:root），并立即验证一次；内容相同则不做任何改动。
+# Debian maintenance scripts (the logrotate mysql snippet, init scripts) connect through /etc/mysql/debian.cnf.
+# The default content is "root + empty password", but root was just switched to password auth -> logrotate would fail every day.
+# Backfill the real password here (600 root:root) and verify it once; when the content already matches, nothing changes.
 if [ -f /etc/mysql/debian.cnf ]; then
     DEBIAN_SOCK=$(grep -m1 '^socket' /etc/mysql/debian.cnf | sed 's/.*=[[:space:]]*//')
     [ -n "${DEBIAN_SOCK:-}" ] || DEBIAN_SOCK=/run/mysqld/mysqld.sock
@@ -258,29 +258,29 @@ EOF
 fi
 echo ""
 echo "==== §4 创建 WordPress 数据库 ===="
-# utf8mb4 完整支持 emoji 等 4 字节字符
-# CREATE USER 与 GRANT 分开写（GRANT ... IDENTIFIED BY 在新版本已废弃）
+# utf8mb4 fully supports 4-byte characters such as emoji
+# Keep CREATE USER and GRANT separate (GRANT ... IDENTIFIED BY is deprecated in recent versions)
 mysql_run -e "CREATE DATABASE IF NOT EXISTS wordpress CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
 mysql -uroot -p"${ROOTPW}" -e "CREATE USER IF NOT EXISTS 'wordpress'@'localhost' IDENTIFIED BY '${DBPASS}';"
 mysql -uroot -p"${ROOTPW}" -e "GRANT ALL ON wordpress.* TO 'wordpress'@'localhost';"
 mysql -uroot -p"${ROOTPW}" -e "FLUSH PRIVILEGES;"
-# 用新用户实际登录验证
+# Log in as the new user to verify it works
 mysql -uwordpress -p"${DBPASS}" wordpress -e "SELECT 'WP_DB_OK' AS status;"
 echo ">>> 已创建：库 wordpress / 用户 wordpress / utf8mb4_general_ci"
 
 echo ""
 echo "==== §5 安装 PHP（不指定版本号，发行版最新稳定版） ===="
-# gd/imagick：媒体库图片上传与缩略图；其余为 WP 常用扩展（REST/更新/翻译/备份 zip）
+# gd/imagick: media-library uploads and thumbnails; the rest are common WordPress extensions (REST / updates / translations / backup zips)
 apt install php-fpm php-mysql php-gd php-imagick php-mbstring php-xml php-curl php-zip php-intl python3 -y
 
-# 放宽 PHP 上传限制（默认 upload 2M / post 8M，备份插件与大媒体上传会 413 失败）
+# Raise the PHP upload limits (defaults are upload 2M / post 8M; backup plugins and large media fail with 413)
 PHP_INI=$(ls /etc/php/*/fpm/php.ini | head -n1)
 sed -i "s/^upload_max_filesize.*/upload_max_filesize = 512M/" "$PHP_INI"
 sed -i "s/^post_max_size.*/post_max_size = 512M/" "$PHP_INI"
 PHP_VER=$(ls /etc/php | head -n1)
 
-# PHP-FPM 池调优（幂等）：低内存 VPS 默认 pm=dynamic / max_children=5，遇到并发高峰或
-# wp-cron 占满池时会返回 503；这里按物理内存给一组保守参数，并用 ondemand 让空闲子进程退出
+# PHP-FPM pool tuning (idempotent): a low-memory VPS defaults to pm=dynamic / max_children=5, which returns 503 when
+# concurrency peaks or wp-cron saturates the pool; these are conservative values derived from physical RAM, with ondemand so idle children exit
 FPM_POOL=$(ls /etc/php/*/fpm/pool.d/www.conf 2> /dev/null | head -n1)
 MEM_MB_FPM=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2> /dev/null || echo 0)
 if [ -n "${FPM_POOL:-}" ]; then
@@ -299,10 +299,10 @@ if [ -n "${FPM_POOL:-}" ]; then
     fi
 fi
 
-# 低内存机器专属优化（仅物理内存 < 1G 生效；大内存机器完全不动，保持发行版默认）：
-#   (1) 没有 swap 就建 1G swapfile —— 0.4G 机器遇到一次内存尖峰就是 OOM 杀进程
-#   (2) PHP-FPM 的 memory_limit 若是 -1/0 或高于 128M，收窄到 128M ——
-#       单个请求吃光全部内存是这类机器最典型的死法（已经是 128M 时为空操作）
+# Low-memory optimisation (only when physical RAM < 1G; larger machines keep the distribution defaults):
+#     (1) create a 1G swapfile when there is none - a single memory spike on a 0.4G box is an OOM kill
+#     (2) narrow the PHP-FPM memory_limit to 128M when it is -1/0 or above 128M -
+#             one request eating all the RAM is the classic way these machines die (already 128M: no-op)
 if [ "${MEM_MB_FPM:-0}" -gt 0 ] && [ "${MEM_MB_FPM}" -lt 1024 ] && [ "${WPDK_SKIP_LOWMEM_TUNE:-0}" != "1" ]; then
     if [ -z "$(awk 'NR > 1' /proc/swaps 2> /dev/null)" ]; then
         if [ ! -f /swapfile ]; then
@@ -340,15 +340,15 @@ fi
 
 systemctl restart php$PHP_VER-fpm
 echo ">>> PHP 上传限制已放宽：upload_max_filesize = post_max_size = 512M"
-# 缺 gd/imagick 时媒体库上传图片会静默失败（WordPress 要求至少一种图像扩展）
+# Without gd/imagick, media-library uploads fail silently (WordPress requires at least one image extension)
 if ! php -m | grep -qiE '^(gd|imagick)$'; then
     echo ">>> 警告：未检测到 php-gd / php-imagick，媒体库图片上传将不可用"
 fi
 
-# 自动探测实际的 PHP-FPM socket 路径（不同 Ubuntu 版本 sock 名不同）
+# Detect the actual PHP-FPM socket path (the socket name differs between Ubuntu releases)
 ls /run/php/
 if [ -e /run/php/php-fpm.sock ]; then
-    PHP_SOCK="/run/php/php-fpm.sock"                      # 通用名优先
+    PHP_SOCK="/run/php/php-fpm.sock"                      # prefer the default socket
 else
     PHP_SOCK=$(ls -t /run/php/php*-fpm.sock 2> /dev/null | head -n1)
 fi
@@ -360,8 +360,8 @@ echo ">>> fastcgi_pass 将使用：${PHP_SOCK}"
 
 echo ""
 echo "==== §6 配置 Nginx 使用 PHP ===="
-# 改写 sites-available/default：index 加 index.php / server_name 用域名 /
-# php location 的 fastcgi_pass 指向实际 sock
+# Rewrite sites-available/default: add index.php to index / use the domain in server_name /
+# point the php location's fastcgi_pass at the real socket
 cp /etc/nginx/sites-available/default "/etc/nginx/sites-available/default.bak.$(date +%s)"
 cat > /etc/nginx/sites-available/default <<EOF
 server {
@@ -371,30 +371,30 @@ server {
     root /var/www/html;
     index index.php index.html index.htm index.nginx-debian.html;
 
-    # 允许大文件上传（备份包/媒体），nginx 默认 1m 会导致 413
+    #     Allow large uploads (backup packages, media); the nginx default of 1m causes 413
     client_max_body_size 512m;
 
-    # 禁止把内部端口拼进目录补斜杠的重定向地址
-    # （避免重定向到访客无法访问的端口）
+    #     Do not append the internal port to the directory-slash redirect
+    #     (visitors cannot reach that port)
     port_in_redirect off;
     absolute_redirect off;
 
     server_name ${DOMAIN};
 
-    # 隐藏 nginx 版本号，减少版本探测
+    #     Hide the nginx version to reduce version probing
     server_tokens off;
 
-    # 上传目录只允许静态资源：即使有 .php 文件被写进去也不会执行（最常见的拿 shell 路径）
+    #     The upload directory serves static files only: a .php file written there never executes (the most common shell path)
     location ^~ /wp-content/uploads/ {
         location ~* \.(php|phtml|php[0-9]|phar)$ { deny all; }
     }
 
-    # 屏蔽版本探测文件与敏感文件直访
+    #     Block version-probing and sensitive files from direct access
     location = /readme.html { deny all; }
     location = /wp-config.php { deny all; }
 
     location / {
-        # WordPress 固定链接 / REST API（/wp-json）需要回退到 index.php
+        #         WordPress permalinks and the REST API (/wp-json) need the index.php fallback
         try_files \$uri \$uri/ /index.php?\$args;
     }
 
@@ -409,14 +409,14 @@ server {
 }
 EOF
 
-# 验证配置语法
+# Validate the configuration syntax
 nginx -t
-# 使新配置生效
+# Apply the new configuration
 systemctl reload nginx
 
 echo ""
 echo "==== §7 测试 PHP 与 Nginx 集成（自动探针） ===="
-# 本机 curl 自动探针，验证 Nginx ↔ PHP-FPM 链路
+# Local curl probe verifying the Nginx <-> PHP-FPM path
 cat > /var/www/html/info.php <<EOF
 <?php
 phpinfo();
@@ -434,9 +434,9 @@ echo ""
 echo "==== §8 安装与配置 WordPress ===="
 cd /root
 rm -rf /root/wordpress /root/latest-zh_CN.tar.gz
-# 下载顺序：本地已上传包优先 → 官方 downloads 端点 → 华为云镜像 → cn.wordpress.org → wordpress.org
-# （镜像路径经常变动或因限流返回 429/HTML 错误页：wget 退出码 0 不代表内容正确，
-#   因此下面必须用 tar -tzf 校验内容确实是 gzip 包，否则换下一个源）
+# Download order: an already uploaded local archive -> the official downloads endpoint -> the Huawei Cloud mirror -> cn.wordpress.org -> wordpress.org
+# (mirror paths change often and rate limiting returns 429 or an HTML error page: a wget exit code of 0 does not mean the
+#    content is right, so the gzip archive must be validated with tar -tzf, otherwise try the next source)
 WP_TGZ="/root/wp_latest_zh.tar.gz"
 if [ ! -f "$WP_TGZ" ]; then
     for URL in https://downloads.wordpress.org/release/zh_CN/wordpress-latest.tar.gz \
@@ -444,7 +444,7 @@ if [ ! -f "$WP_TGZ" ]; then
                https://cn.wordpress.org/latest-zh_CN.tar.gz \
                https://wordpress.org/latest-zh_CN.tar.gz; do
         echo ">>> 尝试下载：${URL}"
-        # -O 固定输出路径：各源 URL 的文件名不同，统一落到 $WP_TGZ 便于校验与复用
+        #         -O pins the output path: each source uses a different file name, so everything lands in $WP_TGZ for validation and reuse
         if wget --timeout=60 --tries=2 --waitretry=5 -O "$WP_TGZ" "${URL}"; then
             if tar -tzf "$WP_TGZ" > /dev/null 2>&1; then
                 echo ">>> 下载成功并通过 gzip 校验"
@@ -457,7 +457,7 @@ if [ ! -f "$WP_TGZ" ]; then
         fi
     done
 fi
-# 兼容：手工 scp 到原始文件名 latest-zh_CN.tar.gz 的情形
+# Compatibility: a manual scp that kept the original name latest-zh_CN.tar.gz
 if [ ! -f "$WP_TGZ" ] && [ -f /root/latest-zh_CN.tar.gz ]; then
     WP_TGZ=/root/latest-zh_CN.tar.gz
 fi
@@ -470,13 +470,13 @@ fi
 ls -la "$WP_TGZ"
 tar -xzf "$WP_TGZ"
 
-# 准备配置文件
+# Prepare the config file
 mv /root/wordpress/wp-config-sample.php /root/wordpress/wp-config.php
 
-# wp-config.php 需修改 5 处：DB_NAME / DB_USER / DB_PASSWORD / DB_CHARSET / Salts
-# 密码经环境变量传入 python，避免多层转义问题
+# wp-config.php needs five edits: DB_NAME / DB_USER / DB_PASSWORD / DB_CHARSET / Salts
+# Passwords travel to python through environment variables to avoid several layers of escaping
 curl -s --max-time 15 https://api.wordpress.org/secret-key/1.1/salt/ > /root/salts.txt
-# 兜底：官方 API 不可达时本地随机生成 8 条 salts（格式与 API 返回一致，安全等价）
+# Fallback: when the official API is unreachable, generate eight random salts locally (same format as the API, equally safe)
 if [ ! -s /root/salts.txt ]; then
     : > /root/salts.txt
     for K in AUTH_KEY SECURE_AUTH_KEY LOGGED_IN_KEY NONCE_KEY \
@@ -498,7 +498,7 @@ salts = open('/root/salts.txt').read()
 if salts.strip():
     if not salts.endswith('\n'):
         salts += '\n'
-    # 整段替换 AUTH_KEY ~ NONCE_SALT 共 8 个 define 行
+    #     Replace the whole AUTH_KEY .. NONCE_SALT block of eight define lines
     s = re.sub(r"define\(\s*'AUTH_KEY'.*?NONCE_SALT.*?;\n", salts, s, count=1, flags=re.S)
 open(p, 'w').write(s)
 print('>>> wp-config.php 已完成 5 处修改')
@@ -507,25 +507,25 @@ rm -f /root/salts.txt
 
 echo ""
 echo "==== §9 部署 WordPress ===="
-# 重跑保护：已安装站点的 wp-config.php 先备份，部署后原样恢复
-# （否则会被新生成的配置覆盖，重跑时输入的密码与原库不一致会导致站点断库）
+# Rerun protection: back up wp-config.php of an installed site and restore it verbatim afterwards
+# (otherwise the freshly generated config overwrites it and a different password disconnects the site from its database)
 WP_CFG_BAK=""
 if [ -f /var/www/html/wp-config.php ]; then
     WP_CFG_BAK="/root/wp-config.php.bak.$(date +%s)"
     cp /var/www/html/wp-config.php "$WP_CFG_BAK"
     echo ">>> 检测到已有 wp-config.php，已备份至 ${WP_CFG_BAK}"
 fi
-# 拷贝到站点根目录
+# Copy to the site root
 cp -r /root/wordpress/* /var/www/html
 if [ -n "$WP_CFG_BAK" ]; then
     cp "$WP_CFG_BAK" /var/www/html/wp-config.php
     echo ">>> 已恢复原 wp-config.php（站点配置与数据库对接保持不变）"
 fi
 
-# 修改属主（Nginx/PHP-FPM 以 www-data 运行，主题安装、上传、更新都需要写）
+# Set the owner (Nginx/PHP-FPM run as www-data and need write access for theme installs, uploads and updates)
 chown -R www-data:www-data /var/www/html
 
-# 按机器内存自动选择图像引擎：小内存优先 GD（省内存更快），大内存保持 Imagick 优先
+# Pick the image engine from installed memory: small machines prefer GD (cheaper and faster), large ones keep Imagick first
 mkdir -p /var/www/html/wp-content/mu-plugins
 cat > /var/www/html/wp-content/mu-plugins/wp-image-perf.php <<'PHP'
 <?php
@@ -589,7 +589,7 @@ add_filter(
 add_filter( 'big_image_size_threshold', '__return_false' );
 PHP
 chown www-data:www-data /var/www/html/wp-content/mu-plugins/wp-image-perf.php
-# 屏蔽用户枚举（REST /wp/v2/users 与 ?author=N 探测）——不影响正常功能，可删除文件回滚
+# Block user enumeration (REST /wp/v2/users and ?author=N probing) - normal features keep working; delete the file to roll back
 cat > /var/www/html/wp-content/mu-plugins/block-user-enumeration.php <<'PHP'
 <?php
 /**
@@ -625,8 +625,8 @@ add_action( 'template_redirect', function () {
 PHP
 chown www-data:www-data /var/www/html/wp-content/mu-plugins/block-user-enumeration.php
 
-# 屏蔽 XML-RPC（system.multicall 密码放大器 / pingback 滥用）。
-# 若使用 WordPress 手机 App 或 Jetpack（依赖 XML-RPC），部署前 export WPDK_ALLOW_XMLRPC=1
+# Block XML-RPC (system.multicall password amplification / pingback abuse).
+# For the WordPress mobile app or Jetpack (both need XML-RPC), export WPDK_ALLOW_XMLRPC=1 before deploying
 if [ "${WPDK_ALLOW_XMLRPC:-0}" = "1" ]; then
     echo ">>> 已按 WPDK_ALLOW_XMLRPC=1 保留 XML-RPC 端点"
 else
@@ -667,28 +667,28 @@ else
     echo ">>> 检测到内存约 ${MEM_MB}MB：媒体处理保持 Imagick 优先；原图不缩放（mu-plugin 已就位）"
 fi
 
-# wp-config.php 含数据库密码，收紧为 root:www-data 640（拒绝其他用户读取）
+# wp-config.php holds the database password: restrict it to root:www-data 640 (other users cannot read it)
 if [ -f /var/www/html/wp-config.php ]; then
     if ! grep -q "define( *'DISALLOW_FILE_EDIT'" /var/www/html/wp-config.php; then
         cp -a /var/www/html/wp-config.php "/root/wp-config.php.pre-hardening.$(date +%s)"
     fi
-    # 禁用后台「插件/主题文件编辑器」：后台被登入后也无法直接改代码，少一条 RCE 路径
+    #     Disable the dashboard plugin/theme file editor: even a compromised admin cannot edit code, removing one RCE path
     wp_config_define DISALLOW_FILE_EDIT true /var/www/html/wp-config.php
     chown root:www-data /var/www/html/wp-config.php
     chmod 640 /var/www/html/wp-config.php
 fi
-# 去掉 Nginx 默认主页，避免覆盖 WordPress
+# Remove the default nginx page so it does not shadow WordPress
 if [ -f /var/www/html/index.nginx-debian.html ]; then
     mv /var/www/html/index.nginx-debian.html /var/www/html/index.html
 fi
 
-# 重启 Nginx
+# Restart nginx
 /etc/init.d/nginx restart
 
-# 部署后自动验证：302 = 未安装（跳转安装向导）；200/301 = 站点已安装并在运行（重跑场景）；
-# 其余（404/500/000）视为异常。注意：重跑已安装的站点时首页会返回 200，不能只认 302——
-# 否则脚本会在 §9 中途退出，而此时 §6 刚把站点配置重写成仅 80 端口、§10 还没给回 443，
-# 结果是站点被留在"没有 HTTPS"的半途状态
+# Post-deploy verification: 302 = not installed (redirect to the wizard); 200/301 = installed and running (rerun case);
+# anything else (404/500/000) is a failure. Note: a rerun against an installed site returns 200 on the home page, so
+# accepting only 302 would abort in the middle of §9 - §6 has just rewritten the config to port 80 only and §10 has
+# not restored 443 yet, leaving the site without HTTPS
 sleep 1
 WP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1/")
 case "$WP_CODE" in
@@ -700,15 +700,15 @@ esac
 
 echo ""
 echo "==== §10 HTTPS 证书申请与自动续期（Let's Encrypt / certbot） ===="
-# 前提：域名已解析到本机且 80 端口公网可达；server_name 为裸 IP 时自动跳过
-# 证书申请失败只告警不终止，不影响已部署的 HTTP 站点
+# Preconditions: the domain resolves here and port 80 is reachable; skipped automatically when server_name is a bare IP
+# A failed certificate request only warns and does not stop: the HTTP site keeps working
 if [ "$DOMAIN" = "$SERVER_IP" ]; then
     echo ">>> 未使用域名（server_name 为 IP），跳过 HTTPS；"
     echo ">>> 解析域名后运行：bash /root/cert_manage.sh reissue 即可补装"
 else
     apt install certbot python3-certbot-nginx -y
 
-    # 通知邮箱：留空则不注册邮箱（--register-unsafely-without-email）
+    #     Notification email: empty means register without an email (--register-unsafely-without-email)
     if [ -n "${EMAIL:-}" ]; then
         EMAIL_ARG="-m ${EMAIL} --no-eff-email"
     else
@@ -718,19 +718,19 @@ else
     if certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos ${EMAIL_ARG} --redirect; then
         echo ">>> 证书申请并安装成功（nginx 已自动改为 80→443 强制跳转）"
 
-        # 自动定时续期：systemd certbot.timer 每天两次检查，到期前 30 天自动续
+        #         Automatic renewal: the systemd certbot.timer checks twice a day and renews 30 days before expiry
         mkdir -p /etc/letsencrypt/renewal-hooks/deploy
         if systemctl list-timers --all 2>/dev/null | grep -q certbot; then
             echo ">>> 自动续期已就绪（systemd timer：certbot.timer）"
         else
-            # 兜底：个别精简系统无 timer 时补 cron（每天 03:17 检查续期）
+            #             Fallback: add a cron entry when a minimal system has no timer (check daily at 03:17)
             cat > /etc/cron.d/certbot-renew <<'CRON'
 17 3 * * * root certbot renew --quiet --deploy-hook "systemctl reload nginx"
 CRON
             echo ">>> certbot.timer 不存在，已补 /etc/cron.d/certbot-renew 定时任务"
         fi
 
-        # 续期成功后自动 reload nginx（certbot renew 触发 deploy 钩子）
+        #         Reload nginx after a successful renewal (certbot renew fires the deploy hook)
         cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh <<'HOOK'
 #!/bin/bash
 systemctl reload nginx
@@ -738,14 +738,14 @@ HOOK
         chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
         echo ">>> 已配置续期钩子：renewal-hooks/deploy/reload-nginx.sh"
 
-        # 续期演练（--dry-run 走 Let's Encrypt 测试环境，不消耗正式配额）
+        #         Renewal rehearsal (--dry-run uses the Let's Encrypt staging environment and spends no quota)
         if certbot renew --dry-run > /dev/null 2>&1; then
             echo ">>> 续期演练通过（certbot renew --dry-run OK）"
         else
             echo ">>> 续期演练失败（不影响证书使用），可运行 cert_manage.sh dryrun 查看详情"
         fi
 
-        # HTTPS 实测
+        #         HTTPS smoke test
         sleep 1
         HTTPS_CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${DOMAIN}/" || echo 000)
         echo ">>> https://${DOMAIN}/ 返回：${HTTPS_CODE}（预期 200 或 302）"
@@ -754,16 +754,16 @@ HOOK
         echo ">>> HTTP 站点不受影响；DNS 生效后运行：bash /root/cert_manage.sh reissue"
     fi
 
-    # 证书手动管理脚本：status=查看 / renew=续期 / force=强制重签 /
-    # dryrun=续期演练 / reissue=重新申请安装（renew 临近到期才真正续）
+    #     Certificate management helper: status=show / renew=renew / force=force reissue /
+    #     dryrun=rehearsal / reissue=reissue and install (renew only acts near expiry)
     cat > /root/cert_manage.sh <<CEOF
 #!/bin/bash
-# HTTPS 证书手动管理（Let's Encrypt / certbot）—— 由 wp_deploy.sh 自动生成
-# 用法：bash /root/cert_manage.sh {status|renew|force|dryrun|reissue}
+# HTTPS certificate management (Let's Encrypt / certbot) - generated by wp_deploy.sh
+# Usage: bash /root/cert_manage.sh {status|renew|force|dryrun|reissue}
 set -e
 DOMAIN="${DOMAIN}"
-# 443 已被独立的 TCP 网关（nginx stream）接管时，certbot --nginx 安装器会往站点块里补
-# listen 443 ssl 而抢占 443；这种情况改用 certonly：只取证书、不改 nginx 配置。
+# When 443 is taken over by a TCP gateway (nginx stream), the certbot --nginx installer would add
+# listen 443 ssl to the site block and grab 443; in that case use certonly: fetch the certificate only, leave nginx alone.
 nginx_443_taken() {
     [ -f /etc/nginx/nginx.conf ] || return 1
     awk '
@@ -796,14 +796,14 @@ case "\$1" in
     *)       echo "用法: \$0 {status|renew|force|dryrun|reissue}"; exit 1 ;;
 esac
 CEOF
-    chmod 700 /root/cert_manage.sh   # 含域名与证书通知邮箱，收紧为仅 root
+    chmod 700 /root/cert_manage.sh   # holds the domain and the certificate notification email: restrict to root
     echo ">>> 证书手动管理脚本已生成：/root/cert_manage.sh"
 fi
 
 echo ""
 echo "==== §11 安全基线与体检（幂等；失败只告警，不影响站点） ===="
 
-# 11.1 无人值守安全更新（只装安全更新、不自动重启；低配机器同样建议开启）
+# 11.1 Unattended security updates (security updates only, no automatic reboot; recommended on small boxes too)
 if ! dpkg -s unattended-upgrades > /dev/null 2>&1; then
     apt install unattended-upgrades -y || echo ">>> 警告：unattended-upgrades 安装失败，请稍后手动开启"
 fi
@@ -818,7 +818,7 @@ if [ "$(lsb_release -rs 2> /dev/null)" = "20.04" ]; then
     echo "          可免费启用 Ubuntu Pro / ESM：pro attach <你的 token>（≤5 台免费）"
 fi
 
-# 11.2 logrotate 体检（MySQL 片段的 postrotate 依赖 /etc/mysql/debian.cnf，§3 已回填口令）
+# 11.2 logrotate check (the MySQL snippet's postrotate depends on /etc/mysql/debian.cnf, which §3 backfilled)
 if logrotate -d /etc/logrotate.d/mysql-server > /dev/null 2>&1; then
     echo ">>> logrotate MySQL 片段可正常解析"
 fi
@@ -836,7 +836,7 @@ else
     echo ">>> logrotate.service 状态正常"
 fi
 
-# 11.3 SSH 加固：仅当 authorized_keys 中已有公钥时才启用（避免把自己锁在门外）
+# 11.3 SSH hardening: only when authorized_keys already holds a public key (avoids locking yourself out)
 SSH_STATE="未改动（未检测到公钥）"
 if [ "${WPDK_SKIP_SSH_HARDEN:-0}" = "1" ]; then
     SSH_STATE="已按 WPDK_SKIP_SSH_HARDEN=1 跳过"
@@ -844,8 +844,8 @@ elif [ -s /root/.ssh/authorized_keys ] && grep -qE '^(ssh-|ecdsa-|sk-)' /root/.s
     SSH_DROPIN=/etc/ssh/sshd_config.d/99-hardening.conf
     mkdir -p /etc/ssh/sshd_config.d
     cat > "$SSH_DROPIN" <<'SSHD'
-# 仅密钥登录 + 抗爆破（由 wp_deploy.sh 写入）
-# 回滚：rm -f /etc/ssh/sshd_config.d/99-hardening.conf && sshd -t && systemctl reload ssh
+# Key-only login + brute-force resistance (written by wp_deploy.sh)
+# Rollback: rm -f /etc/ssh/sshd_config.d/99-hardening.conf && sshd -t && systemctl reload ssh
 PubkeyAuthentication yes
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -885,11 +885,11 @@ SSHD
     fi
 fi
 
-# 11.4 凭据落盘（root 600，便于运维取用）
+# 11.4 Write credentials to disk (root 600, handy for operations)
 CRED_FILE="/root/wp-credentials-${DOMAIN}.txt"
 umask 077
 cat > "$CRED_FILE" <<CRED
-# 由 wp_deploy.sh 于 $(date '+%F %T') 生成（权限 600，仅 root 可读）
+# Generated by wp_deploy.sh at $(date '+%F %T') (mode 600, root only)
 域名/访问地址 : ${DOMAIN}
 服务器公网 IP : ${SERVER_IP}
 数据库名/用户 : wordpress / wordpress
@@ -901,11 +901,11 @@ CRED
 chmod 600 "$CRED_FILE"
 echo ">>> 凭据已写入 ${CRED_FILE}（600）；请勿把含明文口令的部署过程日志长期留在服务器上"
 
-# 11.5 部署后体检（只报告，不因失败中断）
+# 11.5 Post-deploy health check (reports only, never aborts)
 echo "---------------- 体检结果 ----------------"
 if nginx -t > /dev/null 2>&1; then echo "  [OK] nginx 配置语法"; else echo "  [!!] nginx 配置语法异常"; fi
-# 注意：装好证书后 80 端口的 default_server 对 IP 主机名返回 404，所以这里按域名走 443 探测；
-# --resolve 指到 127.0.0.1，既不依赖 DNS 也不依赖 hairpin
+# Note: with a certificate installed, the default_server on port 80 answers 404 for IP hostnames, so probe 443 by domain;
+# --resolve points at 127.0.0.1, depending on neither DNS nor hairpin
 WP_CODE_FINAL=$(curl -sk --resolve "${DOMAIN}:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${DOMAIN}/" 2>/dev/null || echo 000)
 case "$WP_CODE_FINAL" in
     200 | 301 | 302) echo "  [OK] https://${DOMAIN}/ → ${WP_CODE_FINAL}" ;;
