@@ -100,5 +100,8 @@
   },
   "comments": {
     "english": true
+  },
+  "commit_message": {
+    "english": true
   }
 }
