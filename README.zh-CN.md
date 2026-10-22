@@ -2,7 +2,7 @@
 
 **简体中文** · [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-<!-- translated-from: README.md sha256:a392dd51ff97 -->
+<!-- translated-from: README.md sha256:b493d0e231ea -->
 
 在 Ubuntu 云服务器上**一键部署 WordPress 生产站点**的单文件脚本。
 一条命令完成 Nginx + MariaDB + PHP-FPM + WordPress 中文版 + Let's Encrypt HTTPS
@@ -162,6 +162,33 @@ bash /root/cert_manage.sh reissue   # 重新签发安装（证书环节曾失败
 | 加固后无法用密钥登录（SSH 自锁） | 仅在 `authorized_keys` 已有公钥时才加固；交互运行时挂 15 分钟自动回滚（`atrm <任务号>` 取消），无人值守不挂保险 |
 | 低内存机器并发 503 | §5 按内存设置 `pm=ondemand` + `max_children` + `max_requests` |
 | 重复执行加固步骤 | 全部幂等：`;pm.max_requests` 这类注释行也能识别改写，`define('DISALLOW_FILE_EDIT')` 已存在则跳过 |
+
+## 备份与恢复
+
+配套两个脚本：`wp_backup.sh` 生成单文件自包含归档，`wp_restore.sh` 在**同版本系统**上完整还原。
+
+| 组成部分 | 内容 |
+| --- | --- |
+| `db.sql` | `mysqldump --single-transaction --all-databases`（表结构、数据、用户与授权） |
+| `www.tar.gz` | `/var/www/html`，保留数字属主：`wp-config.php`、插件、主题、uploads、mu-plugins |
+| `etc.tar.gz` | nginx（`nginx.conf` + 站点）、PHP（`php.ini`、FPM 池）、`debian.cnf`、SSH drop-in、certbot 定时任务、xray unit |
+| `le.tar.gz` | `/etc/letsencrypt`（证书与续期配置） |
+| `xray.tar.gz` | `config.json`（REALITY 私钥与 UUID）、节点链接、管理脚本、二进制 |
+| `manifest.txt` | 系统、nginx、PHP、MariaDB、WordPress、插件与 xray 版本清单 |
+
+```bash
+bash wp_backup.sh                                      # 输出到 /root/wp-backups，保留 7 天
+_OUT_DIR_=/data/backups _KEEP_DAYS_=30 bash wp_backup.sh
+_SKIP_MAINT_=1 bash wp_backup.sh                       # 跳过维护模式
+bash wp_restore.sh /root/wp-backups/wpbackup-<域名>-<时间戳>.tar.gz
+```
+
+- 备份期间 WordPress 进入维护模式（通常 5~30 秒），保证数据库与文件一致，结束后自动退出。
+- 恢复要求目标是**同版本的干净机器**：脚本会自动装套件、还原配置、导入数据库、还原文件属主并重启服务。
+- 已处理两个实测踩到的坑：导入 `mysql` 库后自动执行 `FLUSH PRIVILEGES`（否则 WordPress 用户
+  会 `Access denied`）；节点链接里的地址若仍是旧 IP，会改写成当前公网 IP（REALITY 密钥不变，
+  只换地址）。
+- 归档内含 REALITY 私钥、数据库口令与证书私钥，等同凭据：文件权限 `600`，请另存异地副本。
 
 ## 常见问题
 

@@ -217,6 +217,42 @@ bash /root/cert_manage.sh reissue   # reissue and install (after a failed certif
 | 503s from concurrency on a small machine | §5 sets `pm=ondemand` + `max_children` + `max_requests` from RAM |
 | hardening steps run again | everything is idempotent: commented lines such as `;pm.max_requests` are recognised, and an existing `define('DISALLOW_FILE_EDIT')` is left alone |
 
+## Backup and restore
+
+Two companion scripts pair with the deployment kit: `wp_backup.sh` produces a
+single self-contained archive, and `wp_restore.sh` brings it back on an
+equivalent host (same Ubuntu release and package set).
+
+| Part | Contents |
+| --- | --- |
+| `db.sql` | `mysqldump --single-transaction --all-databases` (schema, data, users and grants) |
+| `www.tar.gz` | `/var/www/html` with numeric owners: `wp-config.php`, plugins, themes, uploads, mu-plugins |
+| `etc.tar.gz` | nginx (`nginx.conf` + site), PHP (`php.ini`, FPM pool), `debian.cnf`, SSH drop-in, certbot cron, xray unit |
+| `le.tar.gz` | `/etc/letsencrypt` (certificates and renewal configuration) |
+| `xray.tar.gz` | `config.json` (REALITY private key and UUID), node URL, manage script, binary |
+| `manifest.txt` | OS, nginx, PHP, MariaDB, WordPress, plugin and xray versions |
+
+```bash
+bash wp_backup.sh                                      # -> /root/wp-backups, 7-day retention
+_OUT_DIR_=/data/backups _KEEP_DAYS_=30 bash wp_backup.sh
+_SKIP_MAINT_=1 bash wp_backup.sh                       # skip maintenance mode
+bash wp_restore.sh /root/wp-backups/wpbackup-<domain>-<timestamp>.tar.gz
+```
+
+- The backup puts WordPress into maintenance mode while it runs (usually 5-30
+  seconds) so the dump and the file tree are consistent, then removes it.
+- The restore expects a **fresh host with the same Ubuntu release**: it installs
+  the package set, restores the configuration, imports the database, restores the
+  files with their owners and restarts the services.
+- Two failure modes found in practice are handled: the restore runs
+  `FLUSH PRIVILEGES` after importing the `mysql` schema (otherwise the WordPress
+  user gets `Access denied`), and a node URL that still carries the previous
+  address is rewritten to the current public IP (REALITY keys are unchanged,
+  only the address differs).
+- The archive contains the REALITY private key, the database password and the TLS
+  private key: treat it as a credential. It is created with `600` permissions;
+  keep a copy on another host.
+
 ## FAQ
 
 **Q: What if the deployment fails halfway?**
