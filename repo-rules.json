@@ -116,5 +116,9 @@
       "actions/workflows/",
       "img.shields.io/badge/License"
     ]
+  },
+  "about": {
+    "description": "One-click WordPress deployment on Ubuntu (Nginx + MariaDB + PHP-FPM + Let's Encrypt HTTPS); single-file, rerun-safe | 在 Ubuntu 上一键部署 WordPress 生产站点（Nginx + MariaDB + PHP-FPM + Let's Encrypt HTTPS），单文件脚本、幂等可重跑",
+    "order": "en-zh"
   }
 }
