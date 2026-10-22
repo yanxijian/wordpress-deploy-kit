@@ -2,6 +2,10 @@
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
+[![hygiene](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml/badge.svg)](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Ubuntu-E95420.svg)](https://ubuntu.com/)
+
 A single-file script that **deploys a production WordPress site on an Ubuntu
 cloud server in one command**. That command installs, configures, verifies and
 sets up auto-renewal for Nginx + MariaDB + PHP-FPM + WordPress (Chinese

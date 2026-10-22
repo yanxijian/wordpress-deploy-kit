@@ -2,7 +2,11 @@
 
 **한국어** · [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-<!-- translated-from: README.md sha256:b493d0e231ea -->
+[![hygiene](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml/badge.svg)](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Ubuntu-E95420.svg)](https://ubuntu.com/)
+
+<!-- translated-from: README.md sha256:721c813ed748 -->
 
 **Ubuntu 클라우드 서버에 운영용 WordPress를 한 번의 명령으로 배포하는** 파일 하나짜리 스크립트입니다. 그 한 명령이 Nginx + MariaDB + PHP-FPM + WordPress(중국어판) + Let's Encrypt HTTPS의 설치, 설정, 검증, 자동 갱신 설정까지 수행하며, 전체에 5~8분쯤 걸립니다.
 

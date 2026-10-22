@@ -2,7 +2,11 @@
 
 **简体中文** · [English](README.md) · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-<!-- translated-from: README.md sha256:b493d0e231ea -->
+[![hygiene](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml/badge.svg)](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Ubuntu-E95420.svg)](https://ubuntu.com/)
+
+<!-- translated-from: README.md sha256:721c813ed748 -->
 
 在 Ubuntu 云服务器上**一键部署 WordPress 生产站点**的单文件脚本。
 一条命令完成 Nginx + MariaDB + PHP-FPM + WordPress 中文版 + Let's Encrypt HTTPS

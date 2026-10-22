@@ -2,7 +2,11 @@
 
 **日本語** · [English](README.md) · [简体中文](README.zh-CN.md) · [한국어](README.ko.md)
 
-<!-- translated-from: README.md sha256:b493d0e231ea -->
+[![hygiene](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml/badge.svg)](https://github.com/yanxijian/wordpress-deploy-kit/actions/workflows/hygiene.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Ubuntu-E95420.svg)](https://ubuntu.com/)
+
+<!-- translated-from: README.md sha256:721c813ed748 -->
 
 **Ubuntu のクラウドサーバーに本番用 WordPress をワンコマンドで構築する** 1 ファイルのスクリプトです。その 1 コマンドで Nginx + MariaDB + PHP-FPM + WordPress（中国語版）+ Let's Encrypt HTTPS の導入、設定、検証、自動更新の設定まで行います。全体で 5〜8 分ほどです。
 
