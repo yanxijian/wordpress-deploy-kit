@@ -2,7 +2,7 @@
 
 **日本語** · [English](README.md) · [简体中文](README.zh-CN.md) · [한국어](README.ko.md)
 
-<!-- translated-from: README.md sha256:a392dd51ff97 -->
+<!-- translated-from: README.md sha256:b493d0e231ea -->
 
 **Ubuntu のクラウドサーバーに本番用 WordPress をワンコマンドで構築する** 1 ファイルのスクリプトです。その 1 コマンドで Nginx + MariaDB + PHP-FPM + WordPress（中国語版）+ Let's Encrypt HTTPS の導入、設定、検証、自動更新の設定まで行います。全体で 5〜8 分ほどです。
 
@@ -154,6 +154,40 @@ bash /root/cert_manage.sh reissue   # 再発行して導入（証明書の段階
 | SSH の堅牢化後に締め出された | 堅牢化は `authorized_keys` に鍵がある場合だけ実行。対話実行では 15 分の自動ロールバックを張る（`atrm <job>` で取消）。無人実行では張らない |
 | 小さなマシンで同時接続による 503 | §5 が RAM から `pm=ondemand` + `max_children` + `max_requests` を設定 |
 | 堅牢化の段階をもう一度実行 | すべて冪等：`;pm.max_requests` のようなコメント行も認識し、既存の `define('DISALLOW_FILE_EDIT')` はそのまま残す |
+
+## バックアップとリストア
+
+デプロイキットには 2 つの補助スクリプトが付属します。`wp_backup.sh` は単一の自己完結
+アーカイブを生成し、`wp_restore.sh` は同じ OS リリースと同じパッケージ構成のホストで
+それを復元します。
+
+| 構成要素 | 内容 |
+| --- | --- |
+| `db.sql` | `mysqldump --single-transaction --all-databases`（スキーマ、データ、ユーザーと権限） |
+| `www.tar.gz` | `/var/www/html`（数値オーナーを保持）: `wp-config.php`、プラグイン、テーマ、uploads、mu-plugins |
+| `etc.tar.gz` | nginx（`nginx.conf` とサイト設定）、PHP（`php.ini`、FPM プール）、`debian.cnf`、SSH 強化用 drop-in、certbot の cron、xray の unit |
+| `le.tar.gz` | `/etc/letsencrypt`（証明書と更新設定） |
+| `xray.tar.gz` | `config.json`（REALITY 秘密鍵と UUID）、ノード URL、管理スクリプト、バイナリ |
+| `manifest.txt` | OS、nginx、PHP、MariaDB、WordPress、プラグイン、xray のバージョン一覧 |
+
+```bash
+bash wp_backup.sh                                      # /root/wp-backups に出力、7 日保持
+_OUT_DIR_=/data/backups _KEEP_DAYS_=30 bash wp_backup.sh
+_SKIP_MAINT_=1 bash wp_backup.sh                       # メンテナンスモードを省略
+bash wp_restore.sh /root/wp-backups/wpbackup-<domain>-<timestamp>.tar.gz
+```
+
+- バックアップ中は WordPress をメンテナンスモードにします（通常 5〜30 秒）。ダンプと
+  ファイルツリーの整合性を保ち、終了後に自動で解除します。
+- リストア先は**同じ OS リリースのまっさらなホスト**を前提とします。パッケージを導入し、
+  設定を戻し、データベースをインポートし、ファイルをオーナーごと復元してからサービスを
+  再起動します。
+- 実運用で遭遇した 2 つの失敗要因に対処済みです。`mysql` スキーマをインポートした後に
+  `FLUSH PRIVILEGES` を実行します（実行しないと WordPress ユーザーが `Access denied`
+  になります）。また、ノード URL が以前のアドレスのままなら現在のパブリック IP に
+  書き換えます（REALITY の鍵は変わらず、アドレスだけが変わります）。
+- アーカイブには REALITY 秘密鍵、データベースのパスワード、TLS 秘密鍵が含まれます。
+  認証情報として扱い、別ホストにコピーを保管してください（権限は `600`）。
 
 ## FAQ
 

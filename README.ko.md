@@ -2,7 +2,7 @@
 
 **한국어** · [English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-<!-- translated-from: README.md sha256:a392dd51ff97 -->
+<!-- translated-from: README.md sha256:b493d0e231ea -->
 
 **Ubuntu 클라우드 서버에 운영용 WordPress를 한 번의 명령으로 배포하는** 파일 하나짜리 스크립트입니다. 그 한 명령이 Nginx + MariaDB + PHP-FPM + WordPress(중국어판) + Let's Encrypt HTTPS의 설치, 설정, 검증, 자동 갱신 설정까지 수행하며, 전체에 5~8분쯤 걸립니다.
 
@@ -154,6 +154,40 @@ bash /root/cert_manage.sh reissue   # 재발급 후 적용(인증서 단계가 �
 | SSH 강화 후 잠김 | 강화는 `authorized_keys`에 키가 있을 때만 실행. 대화형 실행은 15분 자동 롤백을 걸고(`atrm <job>`로 취소), 무인 실행은 걸지 않음 |
 | 작은 머신에서 동시 접속으로 503 | §5가 RAM에서 `pm=ondemand` + `max_children` + `max_requests` 설정 |
 | 강화 단계를 다시 실행 | 모두 멱등: `;pm.max_requests` 같은 주석 줄도 인식하고, 기존 `define('DISALLOW_FILE_EDIT')`는 그대로 둠 |
+
+## 백업과 복원
+
+배포 키트에는 두 개의 보조 스크립트가 함께 제공됩니다. `wp_backup.sh`는 단일 자체 포함
+아카이브를 만들고, `wp_restore.sh`는 동일한 OS 릴리스와 동일한 패키지 구성의 호스트에서
+이를 복원합니다.
+
+| 구성 요소 | 내용 |
+| --- | --- |
+| `db.sql` | `mysqldump --single-transaction --all-databases`(스키마, 데이터, 사용자와 권한) |
+| `www.tar.gz` | `/var/www/html`(숫자 소유자 유지): `wp-config.php`, 플러그인, 테마, uploads, mu-plugins |
+| `etc.tar.gz` | nginx(`nginx.conf`와 사이트 설정), PHP(`php.ini`, FPM 풀), `debian.cnf`, SSH 강화 drop-in, certbot cron, xray unit |
+| `le.tar.gz` | `/etc/letsencrypt`(인증서와 갱신 설정) |
+| `xray.tar.gz` | `config.json`(REALITY 개인 키와 UUID), 노드 URL, 관리 스크립트, 바이너리 |
+| `manifest.txt` | OS, nginx, PHP, MariaDB, WordPress, 플러그인, xray 버전 목록 |
+
+```bash
+bash wp_backup.sh                                      # /root/wp-backups 출력, 7일 보관
+_OUT_DIR_=/data/backups _KEEP_DAYS_=30 bash wp_backup.sh
+_SKIP_MAINT_=1 bash wp_backup.sh                       # 유지보수 모드 생략
+bash wp_restore.sh /root/wp-backups/wpbackup-<domain>-<timestamp>.tar.gz
+```
+
+- 백업 중에는 WordPress를 유지보수 모드로 전환합니다(보통 5~30초). 덤프와 파일 트리의
+  일관성을 유지하고 완료 후 자동으로 해제합니다.
+- 복원 대상은 **동일한 OS 릴리스의 깨끗한 호스트**를 전제로 합니다. 패키지를 설치하고,
+  설정을 되돌리고, 데이터베이스를 가져오고, 파일을 소유자까지 복원한 뒤 서비스를
+  재시작합니다.
+- 실제 운영에서 만난 두 가지 실패 원인을 처리했습니다. `mysql` 스키마를 가져온 뒤
+  `FLUSH PRIVILEGES`를 실행합니다(실행하지 않으면 WordPress 사용자가 `Access denied`가
+  됩니다). 또한 노드 URL이 이전 주소를 그대로 담고 있으면 현재 공인 IP로 바꿉니다
+  (REALITY 키는 그대로이고 주소만 바뀝니다).
+- 아카이브에는 REALITY 개인 키, 데이터베이스 비밀번호, TLS 개인 키가 들어 있습니다.
+  자격 증명으로 취급하고 다른 호스트에 사본을 보관하세요(권한은 `600`).
 
 ## FAQ
 
